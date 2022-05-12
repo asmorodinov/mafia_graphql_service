@@ -12,9 +12,13 @@ from server_tcp import Server
 import requests
 import json
 
+game_id = 1
+
 
 class GameState:
     def __init__(self, players, seed=None):
+        global game_id
+
         self.players = list(players)  # copy players list
         self.round = 0
         self.is_day = True
@@ -54,6 +58,41 @@ class GameState:
 
         self.startTime = datetime.now()
 
+        # graphql info
+        self.death_cause = {player: "-" for player in self.players}
+        self.startedAt = self.startTime.strftime("%d.%m.%Y %H:%M:%S")
+        self.finishedAt = "-"
+        self.status = "Running"
+        self.is_running = True
+        self.id = game_id
+        game_id += 1
+        self.room = "unspecified"
+
+    def get_room_state_graphql(self):
+        res = {}
+        res["id"] = self.id
+        res["roomName"] = self.room
+        res["status"] = self.status
+        res["startedAt"] = self.startedAt
+        res["finishedAt"] = self.finishedAt
+        res["day"] = self.round
+        res["isDay"] = self.is_day
+
+        players = []
+        for player in self.players:
+            p = {}
+            p["login"] = player
+            p["isAlive"] = not self.is_dead[player]
+            p["deadCause"] = self.death_cause[player]
+            if self.is_running:
+                p["role"] = "unknown"
+            else:
+                p["role"] = self.roles[player]
+            players.append(p)
+        res["players"] = players
+
+        return res
+
     def check_winning_condition(self):
         mafias = 0
         civilians = 0
@@ -64,12 +103,19 @@ class GameState:
         for commissar in self.commissars:
             civilians += 1 - int(self.is_dead[commissar])
 
-        if not mafias:
-            return True, 'Civilians'
-        if mafias >= civilians:
-            return True, 'Mafia'
+        res, who = False, ''
 
-        return False, ''
+        if not mafias:
+            res, who = True, 'Civilians'
+        if mafias >= civilians:
+            res, who = True, 'Mafia'
+
+        if res:
+            self.status = "Finished. " + who + " won."
+            self.is_running = False
+            self.finishedAt = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+
+        return res, who
 
     def check_day_end(self):
         voted = 0
@@ -173,6 +219,9 @@ class MafiaServer(pb2_grpc.MafiaServerServicer):
         self.room_to_state = {}
 
         self.restServiceAddr = input("Enter REST service address ").strip()
+        self.graphqlServiceAddr = input(
+            "Enter GraphQL service address ").strip()
+        self.graphqlCode = "1234"
 
         self.secretCode = "jfdsfndsfksdnfk"
 
@@ -239,6 +288,18 @@ class MafiaServer(pb2_grpc.MafiaServerServicer):
 
         self.voice_chat_server.room_to_logins.get(room, set()).discard(login)
 
+    def SendInfoToQraphQlServer(self, room):
+        if room not in self.room_to_state:
+            return
+        state = self.room_to_state[room]
+        graphQlState = state.get_room_state_graphql()
+        request = {"query": "mutation Create($game: GameInput!, $password: String!) { put(game: $game, password: $password) { id roomName } }",
+                   "variables": {"game": graphQlState, "password": self.graphqlCode}}
+        r = requests.post(self.graphqlServiceAddr + "/graphql",
+                          data=json.dumps(request), timeout=60)
+        if r.status_code != 200:
+            logging.error('update graphql info err code: '+str(r.status_code))
+
     # connect to room
     def ConnectToSpecificRoom(self, request: pb2.ConnectToRoomRequest, context) -> pb2.Response:
         logging.info(
@@ -292,6 +353,8 @@ class MafiaServer(pb2_grpc.MafiaServerServicer):
         # start game in the room
         if len(self.room_to_logins[room]) == self.max_room_size:
             self.room_to_state[room] = GameState(self.room_to_logins[room])
+            self.room_to_state[room].room = room
+            self.SendInfoToQraphQlServer(room)
 
             # tell players their roles
             for player, role in self.room_to_state[room].roles.items():
@@ -345,9 +408,10 @@ class MafiaServer(pb2_grpc.MafiaServerServicer):
                     address = self.login_to_address[player]
                     self.messages.append(
                         {'type': pb2.MessageType.Info, 'message': f'Players voted for {voted_for}', 'to': address})
-
             # execute players
             for player in voted_for:
+                state.death_cause[player] = "Voted off"
+
                 if player in self.login_to_address:
                     address = self.login_to_address[player]
                     self.__disconnect(address)
@@ -371,6 +435,8 @@ class MafiaServer(pb2_grpc.MafiaServerServicer):
 
         state.end_day()
 
+        self.SendInfoToQraphQlServer(room)
+
         return True
 
     def __end_night_check(self, room, state):
@@ -388,6 +454,7 @@ class MafiaServer(pb2_grpc.MafiaServerServicer):
 
             # execute players
             for player in voted_for:
+                state.death_cause[player] = "Killed by mafia"
                 if player in self.login_to_address:
                     address = self.login_to_address[player]
                     self.__disconnect(address)
@@ -410,6 +477,8 @@ class MafiaServer(pb2_grpc.MafiaServerServicer):
                 self.__connect_to_voice_chat_room(player, room)
 
         state.end_night()
+
+        self.SendInfoToQraphQlServer(room)
 
         return True
 
@@ -500,6 +569,8 @@ class MafiaServer(pb2_grpc.MafiaServerServicer):
         state = self.room_to_state[room]
         is_ended, result = state.check_winning_condition()
         if is_ended:
+            self.SendInfoToQraphQlServer(room)
+
             logging.info("game ended, check_game_state")
 
             gameEndedTime = datetime.now()
@@ -543,6 +614,8 @@ class MafiaServer(pb2_grpc.MafiaServerServicer):
 
         login = self.address_to_login.pop(addr, None)
         room = self.login_to_room.pop(login, None)
+
+        self.SendInfoToQraphQlServer(room)
 
         # send info to other members of the room
         if login is not None and room in self.room_to_logins:

@@ -15,10 +15,51 @@ func example() {
 			put(game: $game, password: "1234") {
 				id
 				roomName
+				status
+				day
+				isDay
+				startedAt
+				finishedAt
+				players {
+					login
+					isAlive
+				}
 			}
 		}
 	`
-	res, err := s.doQuery(query, map[string]interface{}{"game": map[string]interface{}{"id": 0, "roomName": "Test room", "status": "TestStatus"}})
+	res, err := s.doQuery(query,
+		map[string]interface{}{"game": map[string]interface{}{
+			"id":       0,
+			"roomName": "Test room",
+			"status":   "TestStatus",
+			"day":      123,
+			"isDay":    true,
+			"players": []map[string]interface{}{
+				{"login": "l1", "isAlive": true, "deadCause": "-", "role": "unknown"},
+				{"login": "l2", "isAlive": true, "deadCause": "-", "role": "unknown"},
+			},
+		},
+		})
+
+	fmt.Printf("%s %v\n", res, err)
+
+	// update game
+	res, err = s.doQuery(query,
+		map[string]interface{}{"game": map[string]interface{}{
+			"id":         0,
+			"roomName":   "Test room 1111",
+			"status":     "TestStatus 2",
+			"day":        123456,
+			"isDay":      false,
+			"startedAt":  "11111",
+			"finishedAt": "111",
+			"players": []map[string]interface{}{
+				{"login": "l1", "isAlive": true, "deadCause": "-", "role": "unknown"},
+				{"login": "l2", "isAlive": false, "deadCause": "Killed by mafia", "role": "unknown"},
+			},
+		},
+		})
+
 	fmt.Printf("%s %v\n", res, err)
 
 	// Query

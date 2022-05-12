@@ -44,6 +44,48 @@ func ListOfGamesFromMap(games map[int]*Game) []Game {
 	return res
 }
 
+func updateGame(game *Game, m map[string]interface{}) {
+	if m == nil {
+		return
+	}
+	if v, ok := m["id"]; ok {
+		game.ID = v.(int)
+	}
+	if v, ok := m["roomName"]; ok {
+		game.RoomName = v.(string)
+	}
+	if v, ok := m["status"]; ok {
+		game.Status = v.(string)
+	}
+	if v, ok := m["startedAt"]; ok {
+		game.StartedAt = v.(string)
+	}
+	if v, ok := m["finishedAt"]; ok {
+		game.FinishedAt = v.(string)
+	}
+	if v, ok := m["isDay"]; ok {
+		game.IsDay = v.(bool)
+	}
+	if v, ok := m["day"]; ok {
+		game.Day = v.(int)
+	}
+	if v, ok := m["players"]; ok {
+		// update players
+		game.Players = make([]Player, 0)
+
+		players := v.([]interface{})
+		for _, player := range players {
+			pl, ok := player.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			p := Player{Login: pl["login"].(string), IsAlive: pl["isAlive"].(bool), DeadCause: pl["deadCause"].(string), Role: pl["role"].(string)}
+			game.Players = append(game.Players, p)
+		}
+	}
+}
+
 // map of games example
 func populate() map[int]*Game {
 	game := Game{
@@ -135,6 +177,26 @@ var gameType = graphql.NewObject(
 	},
 )
 
+var playerInputType = graphql.NewInputObject(
+	graphql.InputObjectConfig{
+		Name: "PlayerInput",
+		Fields: graphql.InputObjectConfigFieldMap{
+			"login": &graphql.InputObjectFieldConfig{
+				Type: graphql.String,
+			},
+			"isAlive": &graphql.InputObjectFieldConfig{
+				Type: graphql.Boolean,
+			},
+			"deadCause": &graphql.InputObjectFieldConfig{
+				Type: graphql.String,
+			},
+			"role": &graphql.InputObjectFieldConfig{
+				Type: graphql.String,
+			},
+		},
+	},
+)
+
 var gameInputType = graphql.NewInputObject(
 	graphql.InputObjectConfig{
 		Name: "GameInput",
@@ -161,10 +223,7 @@ var gameInputType = graphql.NewInputObject(
 				Type: graphql.Int,
 			},
 			"players": &graphql.InputObjectFieldConfig{
-				Type: graphql.NewList(playerType),
-			},
-			"comments": &graphql.InputObjectFieldConfig{
-				Type: graphql.NewList(commentType),
+				Type: graphql.NewList(playerInputType),
 			},
 		},
 	},

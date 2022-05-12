@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -19,7 +20,7 @@ type Server struct {
 }
 
 func NewServer() *Server {
-	s := &Server{sync.Mutex{}, populate(), graphql.Schema{}}
+	s := &Server{sync.Mutex{}, make(map[int]*Game), graphql.Schema{}}
 
 	// get schema
 	schema, err := getSchema(s)
@@ -42,9 +43,18 @@ func (s *Server) putGame(params graphql.ResolveParams) (interface{}, error) {
 	}
 
 	gameMap := params.Args["game"].(map[string]interface{})
-	game := Game{ID: gameMap["id"].(int), RoomName: gameMap["roomName"].(string), Status: gameMap["status"].(string), Comments: make([]Comment, 0)}
-	s.games[game.ID] = &game
-	return game, nil
+	id := gameMap["id"].(int)
+
+	var game *Game
+	if v, ok := s.games[id]; ok {
+		game = v
+	} else {
+		game = &Game{}
+	}
+	updateGame(game, gameMap)
+	s.games[id] = game
+
+	return copyGame(*game), nil
 }
 
 func (s *Server) addComment(params graphql.ResolveParams) (interface{}, error) {
@@ -118,8 +128,15 @@ func (s *Server) graphqlHandler(c *gin.Context) {
 		c.String(http.StatusBadRequest, err.Error())
 		return
 	}
+	// unescape query
+	newstr, err := strconv.Unquote("\"" + request.Query + "\"")
+	if err != nil {
+		c.String(http.StatusBadRequest, err.Error())
+		return
+	}
+
 	// do query
-	res, err := s.doQuery(request.Query, request.Variables)
+	res, err := s.doQuery(newstr, request.Variables)
 	if err != nil {
 		c.String(http.StatusBadRequest, err.Error())
 		return
